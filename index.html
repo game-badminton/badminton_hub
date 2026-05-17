@@ -1157,7 +1157,7 @@ function openPay(evId) {
            </div>`
         : `<div class="card-lg mb3">
             <div class="fw7 mb3">📎 แนบสลิปการโอน</div>
-            <input type="file" id="slip-inp" accept="image/*" capture="environment" class="inp" style="padding:10px;font-size:13px;margin-bottom:12px">
+            <input type="file" id="slip-inp" accept="image/*" class="inp" style="padding:10px;font-size:13px;margin-bottom:12px">
             <div id="slip-prev" class="hidden mb3"><img id="slip-img" class="slip-img" alt="slip"><button onclick="clearSlip()" style="background:rgba(0,0,0,.5);color:#fff;border:none;border-radius:999px;padding:4px 12px;font-size:12px;cursor:pointer">✕ ลบ</button></div>
             <button class="btn btn-p" onclick="submitSlip('${myR?.id}')">📤 ส่งสลิป</button>
           </div>`}
@@ -2353,7 +2353,7 @@ function renderMonthlyPayment() {
         : `<div class="card-lg mb3">
             <div class="fw7 mb2">📎 แนบสลิปชำระเงินเดือนนี้</div>
             <p class="t-sm text-muted mb3">ส่งสลิปโอนเงินรวมทุกวันที่เล่นในเดือน${TM[now.getMonth()]}</p>
-            <input type="file" id="mp-inp" accept="image/*" capture="environment" class="inp" style="padding:10px;font-size:13px;margin-bottom:12px">
+            <input type="file" id="mp-inp" accept="image/*" class="inp" style="padding:10px;font-size:13px;margin-bottom:12px">
             <div id="mp-prev" class="hidden mb3">
               <img id="mp-img" class="slip-img" alt="slip">
               <button onclick="clearMPSlip()" style="background:rgba(0,0,0,.5);color:#fff;border:none;border-radius:999px;padding:4px 12px;font-size:12px;cursor:pointer">✕ ลบ</button>
