@@ -95,6 +95,9 @@ select.inp{appearance:auto}
 .row-b{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
 .row-c{display:flex;align-items:center;justify-content:center;gap:8px}
 .f1{flex:1}
+.month-picker{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:8px;align-items:center}
+.month-picker .inp{height:42px;padding:8px 10px;font-size:14px}
+.month-picker-reset{grid-column:1/-1;justify-self:center}
 
 /* ─── LIST ROWS ──────────────────────────────────────────── */
 .lr{display:flex;align-items:center;gap:12px;padding:13px 16px;border-bottom:1px solid #f8fafc}
@@ -684,6 +687,42 @@ const fRef = path => DB.ref(path);
 let CACHE = { players:[], events:[], regs:[], matches:{}, pin:'1234', monthlyPay:{} };
 const o2a = obj => obj ? Object.values(obj) : [];
 const uid  = () => Date.now().toString(36) + Math.random().toString(36).slice(2,7);
+const DEFAULT_PLAYER_NAMES = [
+  'ปุ๋ย','เบียร์','ตั๊ก','ดา','ฟาง','ก้อย','แนน','ป๊อป','นัท',
+  'ทิว','เบลล์','ยุ้ย','โอห์ม','มอมอ','เกมส์','ตี๋','เอิร์ธ','พี่น้ำ'
+];
+const DEFAULT_PLAYER_ORDER = DEFAULT_PLAYER_NAMES.reduce((map, name, i) => {
+  map[name] = i;
+  return map;
+}, {});
+function hasPlayerOrder(p) {
+  return Number.isFinite(Number(p?.order));
+}
+function normalizePlayerOrder(players) {
+  return players.map((p, i) => ({ ...p, order:i }));
+}
+function sortPlayersBySavedOrder(players) {
+  return [...players].sort((a, b) => {
+    const ao = hasPlayerOrder(a) ? Number(a.order) : 9999;
+    const bo = hasPlayerOrder(b) ? Number(b.order) : 9999;
+    if (ao !== bo) return ao - bo;
+    const ad = DEFAULT_PLAYER_ORDER[a.name] ?? 9999;
+    const bd = DEFAULT_PLAYER_ORDER[b.name] ?? 9999;
+    if (ad !== bd) return ad - bd;
+    return String(a.name || '').localeCompare(String(b.name || ''), 'th');
+  });
+}
+function readPlayers(obj) {
+  return sortPlayersBySavedOrder(o2a(obj));
+}
+function sortPlayersByDefaultOrder(players) {
+  return [...players].sort((a, b) => {
+    const ad = DEFAULT_PLAYER_ORDER[a.name] ?? 9999;
+    const bd = DEFAULT_PLAYER_ORDER[b.name] ?? 9999;
+    if (ad !== bd) return ad - bd;
+    return String(a.name || '').localeCompare(String(b.name || ''), 'th');
+  });
+}
 
 // ── Getters (synchronous, from cache) ──────────────────────
 const getPlayers = () => CACHE.players;
@@ -694,8 +733,9 @@ const getPin     = () => CACHE.pin;
 
 // ── Savers (update cache + write to Firebase) ──────────────
 function savePlayers(v) {
-  CACHE.players = v;
-  const obj = {}; v.forEach(p => { obj[p.id] = p; });
+  const players = normalizePlayerOrder(v);
+  CACHE.players = players;
+  const obj = {}; players.forEach(p => { obj[p.id] = p; });
   fRef('/players').set(obj);
 }
 function saveEvents(v) {
@@ -716,7 +756,15 @@ function saveMatches(v) {
 // ════════════════════════════════════════════════════════════
 // STATE
 // ════════════════════════════════════════════════════════════
-let S = { page:'loading', player:null, isAdmin:false, calDate:new Date(), curEv:null };
+let S = {
+  page:'loading',
+  player:null,
+  isAdmin:false,
+  calDate:new Date(),
+  curEv:null,
+  monthlyDate:new Date(new Date().getFullYear(), new Date().getMonth(), 1),
+  adminMonthlyDate:new Date(new Date().getFullYear(), new Date().getMonth(), 1)
+};
 
 // ════════════════════════════════════════════════════════════
 // REAL-TIME LISTENERS + INITIAL LOAD
@@ -732,13 +780,7 @@ function _onReady(key) {
       document.getElementById('loading-screen').style.display = 'none';
     }, 400);
     if (!CACHE.players.length) {
-      savePlayers([
-        {id:uid(),name:'ตั๊ก'},{id:uid(),name:'ก้อย'},{id:uid(),name:'ฟาง'},
-        {id:uid(),name:'ปุ๋ย'},{id:uid(),name:'เบียร์'},{id:uid(),name:'ดา'},
-        {id:uid(),name:'แนน'},{id:uid(),name:'เกมส์'},{id:uid(),name:'นัท'},
-        {id:uid(),name:'ทิว'},{id:uid(),name:'เบลล์'},{id:uid(),name:'ยุ้ย'},
-        {id:uid(),name:'ป๊อป'},{id:uid(),name:'โอห์ม'},{id:uid(),name:'เอิร์ธ'},
-      ]);
+      savePlayers(DEFAULT_PLAYER_NAMES.map(name => ({id:uid(), name})));
     }
     showPage('landing');
   }
@@ -766,7 +808,13 @@ function refreshCurrentPage() {
 
 (function setupListeners() {
   fRef('/players').on('value', snap => {
-    CACHE.players = o2a(snap.val());
+    let players = readPlayers(snap.val());
+    if (players.length && players.some(p => !hasPlayerOrder(p))) {
+      players = normalizePlayerOrder(sortPlayersByDefaultOrder(players));
+      savePlayers(players);
+    } else {
+      CACHE.players = players;
+    }
     if (!_ready.has('players')) { _onReady('players'); return; }
     refreshCurrentPage();
   });
@@ -897,10 +945,11 @@ function renderDash() {
   const players = getPlayers();
   const mp = getMonthlyPay();
   const mk = getMonthKey();
-  const paidCount = players.filter(p => mp[p.id]?.[mk]?.paid).length;
+  const payablePlayers = getMonthlyPayablePlayers(mk);
+  const paidCount = payablePlayers.filter(({player}) => mp[player.id]?.[mk]?.paid).length;
   document.getElementById('s-players').textContent = players.length;
   document.getElementById('s-events').textContent  = getEvents().length;
-  document.getElementById('s-unpaid').textContent  = players.length - paidCount;
+  document.getElementById('s-unpaid').textContent  = payablePlayers.length - paidCount;
 }
 
 // ════════════════════════════════════════════════════════════
@@ -2261,6 +2310,49 @@ function getMonthKey(d) {
   const dt = d || new Date();
   return `${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,'0')}`;
 }
+function monthStart(d) {
+  const dt = d || new Date();
+  return new Date(dt.getFullYear(), dt.getMonth(), 1);
+}
+function monthKeyToDate(monthKey) {
+  const [y, m] = monthKey.split('-').map(Number);
+  return new Date(y, m-1, 1);
+}
+function monthlyStateKey(scope) {
+  return scope === 'admin' ? 'adminMonthlyDate' : 'monthlyDate';
+}
+function getMonthlyDate(scope) {
+  const key = monthlyStateKey(scope);
+  S[key] = monthStart(S[key] || new Date());
+  return S[key];
+}
+function rerenderMonthlyScope(scope) {
+  if (scope === 'admin') renderAdminMonthlyPay();
+  else renderMonthlyPayment();
+}
+function setMonthlyMonth(scope, monthKey) {
+  if (!/^\d{4}-\d{2}$/.test(monthKey)) return;
+  S[monthlyStateKey(scope)] = monthKeyToDate(monthKey);
+  rerenderMonthlyScope(scope);
+}
+function shiftMonthlyMonth(scope, delta) {
+  const d = getMonthlyDate(scope);
+  S[monthlyStateKey(scope)] = new Date(d.getFullYear(), d.getMonth() + delta, 1);
+  rerenderMonthlyScope(scope);
+}
+function resetMonthlyMonth(scope) {
+  S[monthlyStateKey(scope)] = monthStart(new Date());
+  rerenderMonthlyScope(scope);
+}
+function renderMonthPicker(scope, selectedDate) {
+  const mk = getMonthKey(selectedDate);
+  return `<div class="card month-picker">
+    <button class="btn btn-s btn-sm" onclick="shiftMonthlyMonth('${scope}',-1)">←</button>
+    <input class="inp" type="month" value="${mk}" onchange="setMonthlyMonth('${scope}',this.value)" aria-label="เลือกเดือน">
+    <button class="btn btn-s btn-sm" onclick="shiftMonthlyMonth('${scope}',1)">→</button>
+    <button class="btn-ghost month-picker-reset" onclick="resetMonthlyMonth('${scope}')">เดือนนี้</button>
+  </div>`;
+}
 function openMonthlyPayment() {
   if (!S.player) { toast('กรุณาเลือกชื่อก่อน'); return; }
   showPage('monthlyPayment');
@@ -2285,15 +2377,24 @@ function getPlayerMonthFee(playerId, monthKey) {
   });
   return { total, eventCount: myEvs.length, feeSetCount, missingCount: myEvs.length - feeSetCount };
 }
+function isMonthlyPayable(feeInfo) {
+  return Number(feeInfo?.total || 0) > 0;
+}
+function getMonthlyPayablePlayers(monthKey) {
+  return getPlayers()
+    .map(player => ({ player, feeInfo: getPlayerMonthFee(player.id, monthKey) }))
+    .filter(({ feeInfo }) => isMonthlyPayable(feeInfo));
+}
 function renderMonthlyPayment() {
   const pid = S.player?.id; if (!pid) return;
-  const now = new Date();
-  const mk = getMonthKey(now);
+  const selectedDate = getMonthlyDate('player');
+  const mk = getMonthKey(selectedDate);
+  const selectedMonthName = TM[selectedDate.getMonth()];
   const mp = getMonthlyPay();
   const myPay = mp[pid]?.[mk];
   const events = getEvents(), regs = getRegs();
-  const ms = new Date(now.getFullYear(), now.getMonth(), 1);
-  const me = new Date(now.getFullYear(), now.getMonth()+1, 0);
+  const ms = new Date(selectedDate.getFullYear(), selectedDate.getMonth(), 1);
+  const me = new Date(selectedDate.getFullYear(), selectedDate.getMonth()+1, 0);
   const myEvs = events.filter(ev => {
     const d = new Date(ev.date+'T00:00:00');
     return d >= ms && d <= me && regs.some(r=>r.eventId===ev.id && r.playerId===pid);
@@ -2314,17 +2415,18 @@ function renderMonthlyPayment() {
     <div class="hero hero-am mb4" style="border-radius:28px">
       <div style="font-size:24px;margin-bottom:6px">💳</div>
       <h2 style="font-size:18px;font-weight:900;margin-bottom:2px">ชำระเงินประจำเดือน</h2>
-      <p style="color:rgba(255,255,255,.75);font-size:13px">${TM[now.getMonth()]} ${now.getFullYear()+543} · 👤 ${S.player?.name}</p>
+      <p style="color:rgba(255,255,255,.75);font-size:13px">${selectedMonthName} ${selectedDate.getFullYear()+543} · 👤 ${S.player?.name}</p>
       ${feeSetCount > 0 ? `
       <div style="margin-top:14px;background:rgba(255,255,255,.15);border-radius:16px;padding:12px 16px">
         <div style="font-size:40px;font-weight:900;color:#fff;line-height:1">${totalFee.toLocaleString()} <span style="font-size:18px;font-weight:500">฿</span></div>
         <div style="font-size:12px;color:rgba(255,255,255,.7);margin-top:4px">
-          ยอดรวมเดือนนี้ (${feeSetCount} วัน)${feeSetCount < myEvs.length ? ' · บางวันยังไม่มีค่าคอร์ท' : ''}
+          ยอดรวมเดือน${selectedMonthName} (${feeSetCount} วัน)${feeSetCount < myEvs.length ? ' · บางวันยังไม่มีค่าคอร์ท' : ''}
         </div>
       </div>` : myEvs.length > 0 ? `<div style="margin-top:12px;font-size:12px;color:rgba(255,255,255,.6)">⏳ แอดมินยังไม่ได้กำหนดค่าคอร์ท</div>` : ''}
     </div>
+    ${renderMonthPicker('player', selectedDate)}
     <div class="card mb3">
-      <div class="fw7 mb2">📅 วันที่ลงทะเบียนเดือนนี้ (${myEvs.length} วัน)</div>
+      <div class="fw7 mb2">📅 วันที่ลงทะเบียนเดือน${selectedMonthName} (${myEvs.length} วัน)</div>
       ${myEvs.length
         ? myEvs.map(ev=>{
             const allEvRegs = regs.filter(r=>r.eventId===ev.id);
@@ -2335,7 +2437,7 @@ function renderMonthlyPayment() {
               <span class="sum-lbl">${formatDate(ev.date)}</span>
               <span class="fw7 text-g">${myFee!=null ? myFee.toLocaleString()+' ฿' : '?'}</span>
             </div>`;}).join('')
-        : '<div class="t-sm text-muted" style="padding:8px 0">ยังไม่มีวันเล่นที่จองในเดือนนี้</div>'}
+        : `<div class="t-sm text-muted" style="padding:8px 0">ยังไม่มีวันเล่นที่จองในเดือน${selectedMonthName}</div>`}
     </div>
     ${myPay?.paid
       ? `<div style="background:#ecfdf5;border:2px solid #a7f3d0;border-radius:20px;padding:24px;text-align:center;margin-bottom:12px">
@@ -2352,7 +2454,7 @@ function renderMonthlyPayment() {
            <button class="btn btn-s mb3" onclick="viewMonthlySlip('${pid}','${mk}')">📷 ดูสลิปที่ส่งแล้ว</button>`
         : `<div class="card-lg mb3">
             <div class="fw7 mb2">📎 แนบสลิปชำระเงินเดือนนี้</div>
-            <p class="t-sm text-muted mb3">ส่งสลิปโอนเงินรวมทุกวันที่เล่นในเดือน${TM[now.getMonth()]}</p>
+            <p class="t-sm text-muted mb3">ส่งสลิปโอนเงินรวมทุกวันที่เล่นในเดือน${selectedMonthName}</p>
             <input type="file" id="mp-inp" accept="image/*" class="inp" style="padding:10px;font-size:13px;margin-bottom:12px">
             <div id="mp-prev" class="hidden mb3">
               <img id="mp-img" class="slip-img" alt="slip">
@@ -2401,36 +2503,37 @@ function viewMonthlySlip(playerId, monthKey) {
 // ════════════════════════════════════════════════════════════
 function openAdminMonthlyPay() { showPage('adminMonthlyPay'); }
 function renderAdminMonthlyPay() {
-  const players = getPlayers();
   const mp = getMonthlyPay();
-  const now = new Date();
-  const mk = getMonthKey(now);
-  const confirmedCount = players.filter(p => mp[p.id]?.[mk]?.paid).length;
+  const selectedDate = getMonthlyDate('admin');
+  const mk = getMonthKey(selectedDate);
+  const selectedMonthName = TM[selectedDate.getMonth()];
+  const payablePlayers = getMonthlyPayablePlayers(mk);
+  const confirmedCount = payablePlayers.filter(({player}) => mp[player.id]?.[mk]?.paid).length;
   const cont = document.getElementById('amp-content');
   cont.innerHTML = `
     <div class="hero hero-am mb4" style="border-radius:24px">
       <div class="row-b">
         <div>
           <h2 style="font-size:18px;font-weight:900;margin-bottom:4px">💳 ชำระเงินประจำเดือน</h2>
-          <p style="color:rgba(255,255,255,.75);font-size:13px">${TM[now.getMonth()]} ${now.getFullYear()+543}</p>
+          <p style="color:rgba(255,255,255,.75);font-size:13px">${selectedMonthName} ${selectedDate.getFullYear()+543}</p>
         </div>
         <div style="background:rgba(255,255,255,.2);border-radius:14px;padding:10px 16px;text-align:center">
-          <div style="font-size:28px;font-weight:900;color:#fff">${confirmedCount}/${players.length}</div>
+          <div style="font-size:28px;font-weight:900;color:#fff">${confirmedCount}/${payablePlayers.length}</div>
           <div style="font-size:11px;color:rgba(255,255,255,.7)">ยืนยันแล้ว</div>
         </div>
       </div>
     </div>
+    ${renderMonthPicker('admin', selectedDate)}
     <div class="card-lg card-p0">
       <div class="lh"><span class="fw7">รายชื่อสมาชิก</span></div>
-      ${players.map(p => {
+      ${payablePlayers.length ? payablePlayers.map(({ player: p, feeInfo }) => {
         const pay = mp[p.id]?.[mk];
-        const feeInfo = getPlayerMonthFee(p.id, mk);
         const cnt = feeInfo.eventCount;
         return `<div class="lr" style="flex-wrap:wrap;gap:6px">
           <div class="av">${firstChar(p.name)}</div>
           <div class="f1">
             <div class="fw7">${p.name}</div>
-            <div class="t-xs text-muted">เล่น ${cnt} วันในเดือนนี้</div>
+            <div class="t-xs text-muted">เล่น ${cnt} วันในเดือน${selectedMonthName}</div>
             <div class="t-xs text-g mt1">ยอดที่ควรจ่าย: ${feeInfo.feeSetCount ? feeInfo.total.toLocaleString()+' ฿' : '-'}</div>
             ${feeInfo.missingCount ? `<div class="t-xs text-am mt1">ยังมี ${feeInfo.missingCount} วันที่ยังไม่มีค่าคอร์ท</div>` : ''}
             ${pay?.amountDue!=null?`<div class="t-xs text-muted mt1">ยอดตอนส่งสลิป: ${Number(pay.amountDue).toLocaleString()} ฿</div>`:''}
@@ -2444,7 +2547,7 @@ function renderAdminMonthlyPay() {
             </button>
           </div>
         </div>`;
-      }).join('')}
+      }).join('') : `<div class="empty-txt tc" style="padding:20px">ยังไม่มีผู้เล่นที่มียอดต้องจ่ายในเดือน${selectedMonthName}</div>`}
     </div>`;
 }
 function toggleMonthlyPaid(playerId, monthKey) {
